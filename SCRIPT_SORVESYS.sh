@@ -1,7 +1,6 @@
 #!/bin/bash
 ### Deploy - Servidor Central SorveSys (Empresa) ###
 
-# Limpa a tela para um visual mais limpo
 clear
 
 echo "======================================================="
@@ -12,15 +11,15 @@ IP_ELASTICO="52.203.195.74"
 DISCO_NOME="nvme1n1"
 REPO_SITE="https://github.com/SorveSys/site-instituicional.git"
 PASTA_SITE="$PWD/site-instituicional"
+LINK_SQL="https://github.com/SorveSys/Banco_SorveSys/raw/refs/heads/main/Script_SorveSys.sql"
 
 if [ "$EUID" -ne 0 ]; then 
-    echo "Por favor, execute com permissão de administrador: sudo ./setup_empresa.sh"
+    echo "Por favor, execute com permissão de administrador: sudo ./SorveSys"
     exit 1
 fi
 
-# Solicita a senha de forma segura (os caracteres não aparecem enquanto digita)
 read -s -p "Defina a senha para o Banco de Dados (MySQL): " SENHA_BANCO
-echo "" # Quebra de linha após o usuário digitar a senha escondida
+echo "" 
 echo "======================================================="
 
 echo "Atualizando sistema e instalando dependências base..."
@@ -34,8 +33,9 @@ if ! command -v docker &> /dev/null; then
 fi
 
 echo ""
-read -p "Agora será instalado o Banco de Dados. Deseja prosseguir? (S/N) " RESP_DB
+read -p "Agora será instalado o Banco de Dados com as tabelas. Deseja prosseguir? (S/N) " RESP_DB
 if [[ "$RESP_DB" =~ ^[Ss]$ ]]; then
+    
     echo "Configurando o disco /dev/$DISCO_NOME para o Banco de Dados..."
     if lsblk | grep -q "$DISCO_NOME"; then
         if ! blkid /dev/$DISCO_NOME | grep -q "ext4"; then
@@ -50,16 +50,26 @@ if [[ "$RESP_DB" =~ ^[Ss]$ ]]; then
         mkdir -p /mnt/dados_banco
     fi
 
+    echo "Baixando a estrutura do banco de dados (Tabelas)..."
+    mkdir -p /opt/sorvesys-db-init
+    wget -q -O /opt/sorvesys-db-init/init.sql "$LINK_SQL"
+
     docker rm -f sorvesys-db 2>/dev/null
+    
+    # O segundo -v mapeia o script SQL para a pasta de inicialização automática do MySQL
     docker run -d --name sorvesys-db --restart unless-stopped \
         -e MYSQL_ROOT_PASSWORD=$SENHA_BANCO \
         -e MYSQL_DATABASE=sorvesys_db \
-        -p 3306:3306 -v /mnt/dados_banco:/var/lib/mysql mysql:8.0
-    echo "Banco de dados MySQL operando na porta 3306."
+        -p 3306:3306 \
+        -v /mnt/dados_banco:/var/lib/mysql \
+        -v /opt/sorvesys-db-init:/docker-entrypoint-initdb.d \
+        mysql:8.0
+        
+    echo "Banco de dados MySQL operando na porta 3306 com as tabelas criadas."
 fi
 
 echo ""
-read -p "Agora será instalado o Site Institucional e Dashboard. Deseja prosseguir? (S/N) " RESP_SITE
+read -p "Agora será instalado o Site Institucional. Deseja prosseguir? (S/N) " RESP_SITE
 if [[ "$RESP_SITE" =~ ^[Ss]$ ]]; then
     echo "Baixando e configurando o Site..."
     if [ -d "$PASTA_SITE" ]; then
@@ -85,4 +95,4 @@ EOF
 fi
 
 echo ""
-echo "Instalação do Servidor Central finalizada!"
+echo "🎉 Instalação do Servidor Central finalizada!"
