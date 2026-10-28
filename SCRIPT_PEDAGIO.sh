@@ -29,8 +29,17 @@ apt update -y && apt install -y curl docker.io
 # Garante que o serviço do Docker está rodando
 systemctl enable --now docker
 
+REPO_CAPTURA="https://github.com/SeuUsuario/seu-repositorio-captura.git"
 PASTA_CAPTURA="/opt/sorvesys-captura"
 mkdir -p "$PASTA_CAPTURA"
+
+if [ -d "$PASTA_CAPTURA/.git" ]; then
+    echo "Atualizando código de captura Python do Git..."
+    git -C "$PASTA_CAPTURA" pull
+else
+    echo "Clonando repositório do código Python..."
+    git clone "$REPO_CAPTURA" "$PASTA_CAPTURA"
+fi
 
 # Copia os arquivos do diretório atual para a pasta de build
 [ -f "$PWD/captura.py" ] && cp "$PWD/captura.py" "$PASTA_CAPTURA/"
