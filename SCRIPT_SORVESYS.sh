@@ -7,7 +7,7 @@ echo "======================================================="
 echo "       DEPLOY SORVESYS - SERVIDOR CENTRAL (AWS EC2)    "
 echo "======================================================="
 
-IP_ELASTICO="98.89.118.4"
+IP_ELASTICO="IP_SERVER"
 DISCO_NOME="nvme1n1"
 REPO_SITE="https://github.com/SorveSys/site-instituicional.git"
 PASTA_SITE="$PWD/site-instituicional"
