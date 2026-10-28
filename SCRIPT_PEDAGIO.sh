@@ -12,7 +12,7 @@ echo "Configurando ambiente de monitoramento de hardware..."
 # Variáveis configuradas automaticamente (Sem interação do usuário)
 IP_ELASTICO="52.203.195.74"
 DB_USER="agente_pedagio"
-DB_PASS="SenhaCaptura123!"
+DB_PASS="SenhaCaptura123"
 
 if [ "$EUID" -ne 0 ]; then 
     echo "Por favor, execute com permissão de administrador: sudo ./setup_pedagio.sh"
