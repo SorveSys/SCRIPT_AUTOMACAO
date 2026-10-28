@@ -1,65 +1,102 @@
 #!/bin/bash
-### Deploy Automático - Praça de Pedágio SorveSys (Captura) ###
+# ==============================================================================
+# Script do Coletor SorveSys (Python para Hardware + Java para Rede)
+# Apenas constrói e roda o container de captura, conectando ao banco existente.
+#
+# Uso:
+#   chmod +x script_coleta.sh
+#   sudo ./script_coleta.sh
+# ==============================================================================
 
-# Limpa a tela para visual profissional
-clear
+# --- Configurações do Banco de Dados Existente ---
+# Altere os valores abaixo ou passe as variáveis antes de rodar o script
+DB_HOST="${DB_HOST:-"98.89.118.4"}"     # IP ou Host do Servidor MySQL
+DB_USER="${DB_USER:-"agente_pedagio"}"          # Usuário do banco
+DB_PASSWORD="${DB_PASSWORD:-"senha"}" # Senha do banco
+DB_NAME="${DB_NAME:-"sorvesys_db"}"      # Nome da base de dados
 
-echo "======================================================="
-echo "       INICIANDO INSTALAÇÃO - SORVESYS CAPTURA         "
-echo "======================================================="
-echo "Configurando ambiente de monitoramento de hardware..."
-
-# Variáveis configuradas automaticamente (Sem interação do usuário)
-IP_ELASTICO="IP_ELASTICO_SERVER"
-DB_USER="agente_pedagio"
-DB_PASS="SenhaCaptura123"
-
+# --- 1. Verificação de permissão de Superusuário ---
 if [ "$EUID" -ne 0 ]; then 
-    echo "Por favor, execute com permissão de administrador: sudo ./setup_pedagio.sh"
+    echo "[ERRO] Execute este script com permissão de sudo."
+    echo "Uso: sudo ./script_coleta.sh"
     exit 1
 fi
 
-echo "[1/4] Atualizando sistema e instalando dependências base..."
-apt update && apt upgrade -y > /dev/null 2>&1
+echo "[1/2] Verificando ambiente Docker e preparando diretórios..."
+export DEBIAN_FRONTEND=noninteractive
+apt update -y && apt install -y curl docker.io
 
-if ! command -v docker &> /dev/null; then
-    echo "[2/4] Instalando motor de virtualização (Docker)..."
-    apt install docker.io -y > /dev/null 2>&1
-    systemctl enable --now docker
-else
-    echo "[2/4] Docker já instalado. Pulando etapa..."
+# Garante que o serviço do Docker está rodando
+systemctl enable --now docker
+
+PASTA_CAPTURA="/opt/sorvesys-captura"
+mkdir -p "$PASTA_CAPTURA"
+
+# Copia os arquivos do diretório atual para a pasta de build
+[ -f "$PWD/captura.py" ] && cp "$PWD/captura.py" "$PASTA_CAPTURA/"
+[ -f "$PWD/requirements.txt" ] && cp "$PWD/requirements.txt" "$PASTA_CAPTURA/"
+[ -f "$PWD/coletor.jar" ] && cp "$PWD/coletor.jar" "$PASTA_CAPTURA/"
+
+cd "$PASTA_CAPTURA"
+
+# Garante o arquivo requirements.txt caso não exista localmente
+if [ ! -f "requirements.txt" ]; then
+cat > requirements.txt << 'EOF'
+psutil==7.2.2
+mysql-connector-python==26.7.0
+python-dotenv==1.0.1
+rich==15.0.0
+speedtest-cli==2.1.3
+EOF
 fi
 
-echo "[3/4] Baixando os agentes de captura (Java e Python)..."
-mkdir -p /opt/sorvesys-captura
-cd /opt/sorvesys-captura
-
+# --- 2. Geração do Dockerfile Híbrido ---
 cat > Dockerfile.captura << 'EOF'
 FROM ubuntu:22.04
-RUN apt-get update && apt-get install -y default-jdk python3 python3-pip python3-psutil wget
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Instala Java JDK (Rede), Python 3 e PIP (Hardware)
+RUN apt-get update && apt-get install -y \
+    default-jdk \
+    python3 \
+    python3-pip \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
-# Substitua pelas URLs RAW originais dos executáveis
-RUN wget -q -O captura_python.py "https://github.com/SorveSys/Script_Automacao/raw/refs/heads/main/scripty"
-RUN wget -q -O captura_java.jar "https://github.com/SorveSys/Script_Automacao/raw/refs/heads/main/coletor.jar"
+# Copia os executáveis e dependências para o container
+COPY captura.py /app/captura.py
+COPY requirements.txt /app/requirements.txt
+COPY coletor.jar /app/coletor.jar
 
-CMD ["sh", "-c", "python3 captura_python.py & java -jar captura_java.jar"]
+# Instala as bibliotecas do Python
+RUN pip3 install --no-cache-dir -r requirements.txt
+
+# Executa o script Python em background (&) e o JAR do Java em foreground
+CMD ["sh", "-c", "python3 captura.py & java -jar coletor.jar"]
 EOF
 
-echo "[4/4] Iniciando os agentes de monitoramento..."
+# --- 3. Build e Execução do Container ---
+echo "[2/2] Construindo imagem e subindo container de captura..."
 docker rm -f sorvesys-captura 2>/dev/null
-docker build -t sorvesys-captura:1.0 -f Dockerfile.captura . > /dev/null 2>&1
+docker build -t sorvesys-captura:1.0 -f Dockerfile.captura .
 
-# O container agora sobe utilizando as credenciais do usuário restrito, 
-# que nós "chumbamos" nas variáveis lá em cima de forma segura.
-docker run -d --name sorvesys-captura --restart unless-stopped \
-    -e DB_HOST=$IP_ELASTICO \
-    -e DB_USER=$DB_USER \
-    -e DB_PASS=$DB_PASS \
-    sorvesys-captura:1.0
-    
-echo "======================================================="
-echo "INSTALAÇÃO CONCLUÍDA COM SUCESSO!"
-echo "Os agentes já estão rodando em segundo plano e enviando"
-echo "os dados de consumo desta máquina para a central."
-echo "======================================================="
+# O modo --net=host permite ao container acessar facilmentes o MySQL em 127.0.0.1 ou IPs da rede
+docker run -d \
+  --name sorvesys-captura \
+  --net=host \
+  -e DB_HOST="$DB_HOST" \
+  -e DB_USER="$DB_USER" \
+  -e DB_PASSWORD="$DB_PASSWORD" \
+  -e DB_NAME="$DB_NAME" \
+  --restart always \
+  sorvesys-captura:1.0
+
+# --- Resumo da Execução ---
+echo ""
+echo "======================================================================"
+echo "Container de Coleta (Python + Java) iniciado com sucesso!"
+echo "Apontando para o Banco MySQL em: $DB_HOST (Base: $DB_NAME)"
+echo "======================================================================"
