@@ -1,4 +1,4 @@
-
+```bash
 #!/bin/bash
 
 set -Eeuo pipefail
@@ -7,7 +7,7 @@ set -Eeuo pipefail
 # SORVESYS - INSTALACAO AUTOMATICA DOS AGENTES DE PEDAGIO
 # ==========================================================
 
-IP_ELASTICO="98.89.118.4"
+IP_ELASTICO="35.171.71.79"
 DB_USER="agente_pedagio"
 CONTAINER_NAME="sorvesys-captura"
 IMAGE_NAME="sorvesys-captura:1.0"
@@ -23,18 +23,17 @@ echo "======================================================="
 # Verifica permissao de administrador
 if [ "$EUID" -ne 0 ]; then
     echo "ERRO: execute com sudo."
-    echo "Exemplo: sudo env DB_PASS='SUA_SENHA' ./SCRIPT_PEDAGIO.sh"
+    echo "Exemplo: sudo env DB_PASS='SUA_SENHA' bash ./SCRIPT_PEDAGIO.sh"
     exit 1
 fi
 
-# A senha deve ser informada no ambiente, sem ficar no repositorio
+# Verifica se a senha foi informada
 if [ -z "${DB_PASS:-}" ]; then
     echo "ERRO: a variavel DB_PASS nao foi informada."
-    echo "Execute: sudo env DB_PASS='SUA_SENHA' ./SCRIPT_PEDAGIO.sh"
+    echo "Execute: sudo env DB_PASS='SUA_SENHA' bash ./SCRIPT_PEDAGIO.sh"
     exit 1
 fi
 
-# Mostra erros de forma clara
 trap 'echo "ERRO: falha na linha $LINENO. Verifique a mensagem acima."' ERR
 
 echo
@@ -56,13 +55,14 @@ if ! docker info >/dev/null 2>&1; then
 fi
 
 echo
-echo "[4/6] Baixando os arquivos do repositorio publico..."
+echo "[4/6] Baixando os arquivos atualizados do GitHub..."
+
 mkdir -p "$BASE_DIR"
 rm -rf "$SOURCE_DIR"
 
 git clone --depth 1 "$REPO_URL" "$SOURCE_DIR"
 
-# Valida os arquivos necessarios antes de construir a imagem
+# Valida os arquivos necessarios
 for arquivo in captura.py coletor.jar requirements.txt; do
     if [ ! -s "${SOURCE_DIR}/${arquivo}" ]; then
         echo "ERRO: arquivo ausente ou vazio: ${SOURCE_DIR}/${arquivo}"
@@ -70,10 +70,13 @@ for arquivo in captura.py coletor.jar requirements.txt; do
     fi
 done
 
-echo
-echo "[5/6] Preparando e construindo a imagem Docker..."
+# Atualiza o IP antigo caso esteja fixo no codigo Python
+sed -i 's/98\.89\.118\.4/35.171.71.79/g' \
+    "${SOURCE_DIR}/captura.py"
 
-# Gera um Dockerfile proprio para executar os dois agentes
+echo
+echo "[5/6] Construindo a imagem Docker..."
+
 cat > "${BASE_DIR}/Dockerfile.captura" <<'DOCKERFILE'
 FROM ubuntu:22.04
 
@@ -97,11 +100,9 @@ RUN pip3 install --no-cache-dir -r /app/requirements.txt
 COPY captura.py /app/captura.py
 COPY coletor.jar /app/coletor.jar
 
-# Encerra o container se um dos agentes parar.
 CMD ["bash", "-lc", "python3 -u /app/captura.py & PID_PY=$!; java -jar /app/coletor.jar & PID_JAVA=$!; trap 'kill $PID_PY $PID_JAVA 2>/dev/null || true' TERM INT; wait -n $PID_PY $PID_JAVA; STATUS=$?; kill $PID_PY $PID_JAVA 2>/dev/null || true; wait 2>/dev/null || true; exit $STATUS"]
 DOCKERFILE
 
-# Usa os arquivos baixados como contexto de build
 docker build \
     --pull \
     --no-cache \
@@ -110,14 +111,12 @@ docker build \
     "$SOURCE_DIR"
 
 echo
-echo "[6/6] Iniciando os agentes..."
+echo "[6/6] Removendo o container antigo e iniciando os agentes..."
 
-# Remove o container antigo, se existir
 if docker container inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
     docker rm -f "$CONTAINER_NAME"
 fi
 
-# Cria e inicia o container
 docker run -d \
     --name "$CONTAINER_NAME" \
     --restart unless-stopped \
@@ -126,13 +125,11 @@ docker run -d \
     -e DB_PASS="$DB_PASS" \
     "$IMAGE_NAME"
 
-# Verifica se o container continua em execucao
 sleep 5
 
 if [ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME")" != "true" ]; then
     echo
     echo "ERRO: o container nao permaneceu em execucao."
-    echo "Ultimos logs:"
     docker logs --tail 80 "$CONTAINER_NAME" || true
     exit 1
 fi
@@ -152,3 +149,4 @@ echo
 echo "Para verificar o estado:"
 echo "sudo docker ps"
 echo
+```
