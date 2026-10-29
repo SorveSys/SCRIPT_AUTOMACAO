@@ -1,108 +1,65 @@
 #!/bin/bash
-# ==============================================================================
-# Script de Deploy do Coletor SorveSys (Python + Java)
-# Clona o código do GitHub e executa o container conectado ao MySQL.
-#
-# Uso:
-#   chmod +x script_coleta.sh
-#   sudo ./script_coleta.sh
-# ==============================================================================
+### Deploy Automático - Praça de Pedágio SorveSys (Captura) ###
 
-# --- 1. CONFIGURE AQUI O LINK DO SEU REPOSITÓRIO GITHUB ---
-REPO_CAPTURA="https://github.com/SorveSys/CODIGOS_SCRIPT.git"
+# Limpa a tela para visual profissional
+clear
 
-# --- Dados de Conexão com o Banco MySQL Existente ---
-DB_HOST="${DB_HOST:-"98.89.118.4"}"     # IP ou Host do Banco MySQL
-DB_USER="${DB_USER:-"agente_pedagio"}"          # Usuário do banco
-DB_PASSWORD="${DB_PASSWORD:-"SenhaCaptura123"}" # Senha do banco
-DB_NAME="${DB_NAME:-"sorvesys_db"}"      # Nome da base de dados
+echo "======================================================="
+echo "       INICIANDO INSTALAÇÃO - SORVESYS CAPTURA         "
+echo "======================================================="
+echo "Configurando ambiente de monitoramento de hardware..."
 
-# --- Verificação de permissão Root ---
+# Variáveis configuradas automaticamente (Sem interação do usuário)
+IP_ELASTICO="98.89.118.4"
+DB_USER="agente_pedagio"
+DB_PASS="SenhaCaptura123!"
+
 if [ "$EUID" -ne 0 ]; then 
-    echo "[ERRO] Execute este script com sudo."
+    echo "Por favor, execute com permissão de administrador: sudo ./setup_pedagio.sh"
     exit 1
 fi
 
-echo "🚀 [1/3] Instalando dependências base e baixando o código do Git..."
-export DEBIAN_FRONTEND=noninteractive
-apt update -y && apt install -y git docker.io curl
+echo "[1/4] Atualizando sistema e instalando dependências base..."
+apt update && apt upgrade -y > /dev/null 2>&1
 
-systemctl enable --now docker
-
-PASTA_CAPTURA="/opt/sorvesys-captura"
-
-# Clona ou atualiza o repositório na pasta de build
-if [ -d "$PASTA_CAPTURA/.git" ]; then
-    echo "Atualizando código de captura via Git..."
-    git -C "$PASTA_CAPTURA" pull
+if ! command -v docker &> /dev/null; then
+    echo "[2/4] Instalando motor de virtualização (Docker)..."
+    apt install docker.io -y > /dev/null 2>&1
+    systemctl enable --now docker
 else
-    echo "Clonando repositório de captura..."
-    rm -rf "$PASTA_CAPTURA"
-    git clone "$REPO_CAPTURA" "$PASTA_CAPTURA"
+    echo "[2/4] Docker já instalado. Pulando etapa..."
 fi
 
-cd "$PASTA_CAPTURA"
+echo "[3/4] Baixando os agentes de captura (Java e Python)..."
+mkdir -p /opt/sorvesys-captura
+cd /opt/sorvesys-captura
 
-# Verifica se o arquivo captura.py foi realmente clonado
-if [ ! -f "captura.py" ]; then
-    echo "[ERRO CRÍTICO] O arquivo 'captura.py' não foi encontrado na raiz do repositório $REPO_CAPTURA."
-    echo "Certifique-se de que o arquivo está na raiz do repositório e com o nome correto."
-    exit 1
-fi
-
-# Cria um requirements.txt padrão caso não exista no repositório
-if [ ! -f "requirements.txt" ]; then
-cat > requirements.txt << 'EOF'
-psutil==7.2.2
-mysql-connector-python==26.7.0
-python-dotenv==1.0.1
-rich==15.0.0
-speedtest-cli==2.1.3
-EOF
-fi
-
-# --- 2. Geração do Dockerfile ---
-echo "[2/3] Gerando o Dockerfile.captura..."
 cat > Dockerfile.captura << 'EOF'
 FROM ubuntu:22.04
-
-ENV DEBIAN_FRONTEND=noninteractive
-
-RUN apt-get update && apt-get install -y \
-    default-jdk \
-    python3 \
-    python3-pip \
-    wget \
-    && rm -rf /var/lib/apt/lists/*
-
+RUN apt-get update && apt-get install -y default-jdk python3 python3-pip python3-psutil wget
 WORKDIR /app
 
-# Copia os arquivos baixados pelo Git para dentro da imagem
-COPY captura.py /app/captura.py
-COPY requirements.txt /app/requirements.txt
-COPY coletor.jar /app/coletor.jar
+# Substitua pelas URLs RAW originais dos executáveis
+RUN wget -q -O captura_python.py "https://github.com/SorveSys/Script_Automacao/raw/refs/heads/main/scripty"
+RUN wget -q -O captura_java.jar "https://github.com/SorveSys/Script_Automacao/raw/refs/heads/main/coletor.jar"
 
-RUN pip3 install --no-cache-dir -r requirements.txt
-
-CMD ["sh", "-c", "python3 captura.py & java -jar coletor.jar"]
+CMD ["sh", "-c", "python3 captura_python.py & java -jar captura_java.jar"]
 EOF
 
-# --- 3. Build e Execução do Container ---
-echo "[3/3] Construindo imagem e iniciando o container..."
+echo "[4/4] Iniciando os agentes de monitoramento..."
 docker rm -f sorvesys-captura 2>/dev/null
-docker build -t sorvesys-captura:1.0 -f Dockerfile.captura .
+docker build -t sorvesys-captura:1.0 -f Dockerfile.captura . > /dev/null 2>&1
 
-docker run -d \
-  --name sorvesys-captura \
-  --net=host \
-  -e DB_HOST="$DB_HOST" \
-  -e DB_USER="$DB_USER" \
-  -e DB_PASSWORD="$DB_PASSWORD" \
-  -e DB_NAME="$DB_NAME" \
-  --restart always \
-  sorvesys-captura:1.0
-
-echo ""
-echo "======================================================================"
-echo "Container de Coleta (sorvesys-captura) implantado e rodando!"
-echo "======================================================================"
+# O container agora sobe utilizando as credenciais do usuário restrito, 
+# que nós "chumbamos" nas variáveis lá em cima de forma segura.
+docker run -d --name sorvesys-captura --restart unless-stopped \
+    -e DB_HOST=$IP_ELASTICO \
+    -e DB_USER=$DB_USER \
+    -e DB_PASS=$DB_PASS \
+    sorvesys-captura:1.0
+    
+echo "======================================================="
+echo "INSTALAÇÃO CONCLUÍDA COM SUCESSO!"
+echo "Os agentes já estão rodando em segundo plano e enviando"
+echo "os dados de consumo desta máquina para a central."
+echo "======================================================="
